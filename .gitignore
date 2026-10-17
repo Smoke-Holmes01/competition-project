@@ -1,0 +1,60 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+
+# Dependencies and Python environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Generated files
+dist/
+build/
+coverage/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.tsbuildinfo
+*.log
+ancient_arch_backend/outputs/
+
+# Large datasets and generated retrieval assets (kept locally)
+ancient_arch_backend/data/raw/
+ancient_arch_backend/data/masks/
+ancient_arch_backend/data/renders/
+ancient_arch_backend/data/test/
+ancient_arch_backend/data/test_multi/
+ancient_arch_backend/data/assembly/
+ancient_arch_backend/faiss_index/
+ancient_arch_backend/models/
+ancient_arch_backend/models_glb/
+ancient_arch_backend/checkpoints/*
+!ancient_arch_backend/checkpoints/repair_train_log.csv
+ancient-architecture-agent/public/
+
+# Model parameters and binary model/data assets
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.npz
+*.npy
+*.faiss
+*.pkl
+*.obj
+*.glb
+*.gltf
+*.fbx
+*.stl
+
+# Editor and operating system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

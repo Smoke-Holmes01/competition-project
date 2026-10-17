@@ -1,0 +1,5 @@
+{
+  "name": "古建智能体 (Ancient Architecture Agent)",
+  "description": "An AI-powered platform for identifying and analyzing ancient Chinese architectural components through 3D models and knowledge retrieval.",
+  "requestFramePermissions": []
+}
