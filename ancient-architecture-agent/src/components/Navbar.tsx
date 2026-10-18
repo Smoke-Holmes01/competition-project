@@ -1,12 +1,9 @@
 import React from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut, Settings, UserCircle } from 'lucide-react';
-import { useAuth } from '../auth/AuthProvider';
+import { Link, useLocation } from 'react-router-dom';
+import { Settings } from 'lucide-react';
 
 export default function Navbar() {
   const location = useLocation();
-  const navigate = useNavigate();
-  const { isAuthenticated, logout, user } = useAuth();
 
   const navLinks = [
     { name: '首页', path: '/' },
@@ -15,12 +12,7 @@ export default function Navbar() {
     { name: '关于', path: '/about' },
   ];
 
-  async function handleLogout() {
-    await logout();
-    navigate('/login', { replace: true });
-  }
-
-  const workbenchTarget = isAuthenticated ? '/workbench' : '/login?redirect=%2Fworkbench';
+  const workbenchTarget = '/workbench';
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 h-16 flex items-center px-8 transition-all duration-300 bg-surface/90 backdrop-blur-xl shadow-[0px_12px_32px_-4px_rgba(139,90,43,0.15)] border-b border-accent-weak/30">
@@ -48,25 +40,13 @@ export default function Navbar() {
         </div>
         <div className="flex items-center gap-4">
           <Link to={workbenchTarget} className="ancient-button text-sm font-semibold transition-all hover:opacity-90 active:scale-95 shadow-sm">
-            {isAuthenticated ? '进入展厅' : '登录后进入'}
+            进入展厅
           </Link>
           <div className="flex items-center gap-2">
             <button type="button" className="p-2 rounded-md transition-colors hover:bg-surface-container-low text-on-surface-variant">
               <Settings size={20} />
             </button>
-            {isAuthenticated ? (
-              <div className="flex items-center gap-2 rounded-full bg-surface-container-low px-3 py-1.5 text-sm text-on-surface-variant">
-                <UserCircle size={18} />
-                <span className="max-w-24 truncate font-medium text-on-surface">{user?.username}</span>
-                <button type="button" onClick={() => void handleLogout()} className="rounded-full p-1 transition-colors hover:bg-surface-container">
-                  <LogOut size={16} />
-                </button>
-              </div>
-            ) : (
-              <Link to="/login" className="p-2 rounded-md transition-colors hover:bg-surface-container-low text-on-surface-variant">
-                <UserCircle size={20} />
-              </Link>
-            )}
+
           </div>
         </div>
       </div>

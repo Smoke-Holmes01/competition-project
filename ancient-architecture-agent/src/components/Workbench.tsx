@@ -10,7 +10,6 @@ import {
   Image as ImageIcon,
   X,
   Send,
-  Mic,
   Bot,
   Settings,
   CloudCheck,
@@ -19,8 +18,6 @@ import {
   RotateCw,
   BarChart3,
   BrainCircuit,
-  Volume2,
-  Square,
   Layers3,
   Play,
   Pause,
@@ -30,7 +27,7 @@ import {
   Camera,
 } from 'lucide-react';
 import { MOCK_MODELS } from '../constants';
-import { AgentChatResponse, AgentHistoryMessage, AgentModelProvider, streamAgentChat, synthesizeSpeech } from '../api';
+import { type AgentChatResponse, type Conversation, type ProgressEvent, getConversation, deleteConversation, streamAgentChat } from '../api';
 import type { ModelViewerElement } from '../model-viewer';
 import { applyModelViewerWoodMaterial, bindModelViewerWoodMaterial } from '../modelMaterials';
 import DougongAssemblyViewer from './DougongAssemblyViewer';
@@ -46,79 +43,24 @@ interface ChatMessage {
   pending?: boolean;
 }
 
-interface StoredChatState {
-  conversationId: string;
-  messages: ChatMessage[];
-}
-
 type WorkbenchView = 'recognition' | 'model' | 'knowledge';
 type ModelPreviewMode = 'default' | 'assembly';
-
-const CHAT_STORAGE_KEY = 'ancient-agent-workbench-chat';
-const MODEL_PROVIDER_STORAGE_KEY = 'ancient-agent-model-provider';
-const AVATAR_FRAMES = [
-  '/avaters/mouth_A.png',
-  '/avaters/mouth_B.png',
-  '/avaters/mouth_C.png',
-  '/avaters/mouth_D.png',
-  '/avaters/mouth_E.png',
-  '/avaters/mouth_G.png',
-  '/avaters/mouth_H.png',
-];
-const SPEECH_RATE = 1;
+const ACTIVE_CONVERSATION_KEY = 'ancient-agent-active-conversation-v2';
 const EXAMPLE_QUESTIONS = ['这张图是什么？', '这个斗拱是哪个朝代的？', '清代斗拱与宋代的主要区别？', '解释“七踩”在斗拱中的含义。'];
-const AGENT_MODEL_OPTIONS: Array<{provider: AgentModelProvider; label: string; mode: string}> = [
-  { provider: 'api', label: 'Qwen3.5-397B-A17B', mode: 'API' },
-  { provider: 'local', label: 'Qwen3.5-9B', mode: '本地' },
-];
 
-function createConversationId() {
-  return `conv_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function readStoredChat(): StoredChatState {
+function createConversationId() { return `conv_${crypto.randomUUID().replaceAll('-', '')}`; }
+function activeConversationId() {
   try {
-    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
-    if (!raw) {
-      return { conversationId: createConversationId(), messages: [] };
-    }
-    const parsed = JSON.parse(raw) as Partial<StoredChatState>;
-    if (!parsed.conversationId || !Array.isArray(parsed.messages)) {
-      return { conversationId: createConversationId(), messages: [] };
-    }
-    return {
-      conversationId: parsed.conversationId,
-      messages: parsed.messages.filter(
-        (item): item is ChatMessage =>
-          (item?.role === 'user' || item?.role === 'agent') &&
-          typeof item.text === 'string' &&
-          typeof item.time === 'string',
-      ).map((item) => ({
-        role: item.role,
-        text: item.text,
-        time: item.time,
-        pending: item.pending,
-        imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : undefined,
-        imageName: typeof item.imageName === 'string' ? item.imageName : undefined,
-      })),
-    };
-  } catch {
-    return { conversationId: createConversationId(), messages: [] };
-  }
+    window.localStorage.removeItem('ancient-agent-workbench-chat');
+    window.localStorage.removeItem('ancient-agent-model-provider');
+    return window.localStorage.getItem(ACTIVE_CONVERSATION_KEY) || createConversationId();
+  } catch { return createConversationId(); }
 }
-
-function readStoredModelProvider(): AgentModelProvider {
-  try {
-    return window.localStorage.getItem(MODEL_PROVIDER_STORAGE_KEY) === 'local' ? 'local' : 'api';
-  } catch {
-    return 'api';
-  }
-}
-
-function toAgentHistory(messages: ChatMessage[]): AgentHistoryMessage[] {
-  return messages.filter((item) => !item.pending).map((item) => ({
-    role: item.role === 'user' ? 'user' : 'assistant',
-    content: item.text,
+function restoredMessages(conversation: Conversation): ChatMessage[] {
+  return conversation.messages.map(message => ({
+    role: message.role === 'assistant' ? 'agent' : 'user', text: message.content, time: message.time,
+    imageUrl: message.assets[0] ? `/agent/assets/${message.assets[0].id}` : undefined,
+    imageName: message.assets.length > 1 ? `${message.assets.length} 张图片` : message.assets[0]?.filename,
   }));
 }
 
@@ -131,17 +73,14 @@ function normalizeModelId(modelId: string | null) {
 
 export default function Workbench() {
   const [searchParams] = useSearchParams();
-  const [storedChat] = useState<StoredChatState>(() => readStoredChat());
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const modelViewerRef = useRef<ModelViewerElement>(null);
-  const avatarTimerRef = useRef<number | null>(null);
-  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
-  const speechRunIdRef = useRef(0);
-  const [conversationId, setConversationId] = useState(storedChat.conversationId);
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const [conversationId, setConversationId] = useState(activeConversationId);
   const [chatInput, setChatInput] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>(storedChat.messages);
-  const [speakingMessageIndex, setSpeakingMessageIndex] = useState<number | null>(null);
-  const [avatarFrameIndex, setAvatarFrameIndex] = useState(0);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isRestoring, setIsRestoring] = useState(true);
+  const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreview, setImagePreview] = useState(MOCK_MODELS[0].imageUrl);
   const [previewImage, setPreviewImage] = useState<{url: string; name?: string} | null>(null);
@@ -150,7 +89,6 @@ export default function Workbench() {
   const [activeModelId, setActiveModelId] = useState(() => normalizeModelId(searchParams.get('model')));
   const [isAutoRotate, setIsAutoRotate] = useState(true);
   const [modelViewerKey, setModelViewerKey] = useState(0);
-  const [modelProvider, setModelProvider] = useState<AgentModelProvider>(() => readStoredModelProvider());
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [previewMode, setPreviewMode] = useState<ModelPreviewMode>('default');
@@ -179,29 +117,29 @@ export default function Workbench() {
   const shouldBindModelViewerMaterial = activeView !== 'knowledge';
 
   const confidence = agentResult?.render_instruction?.confidence ?? agentResult?.tool_result?.confidence;
-  const top5 = agentResult?.tool_result?.top5 ?? [
-    { group: 'group_001', score: 0.966 },
-    { group: 'group_002', score: 0.012 },
-    { group: 'group_003', score: 0.005 },
-    { group: 'group_020', score: 0.002 },
-    { group: 'group_005', score: 0.001 },
-  ];
+  const top5 = agentResult?.tool_result?.top5 ?? [];
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({ conversationId, messages }));
-    } catch {
-      // Local persistence is best-effort; chat still works if storage is unavailable.
-    }
-  }, [conversationId, messages]);
+    try { window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, conversationId); } catch { /* optional */ }
+    const controller = new AbortController();
+    let active = true;
+    setIsRestoring(true);
+    getConversation(conversationId, controller.signal).then(conversation => {
+      if (!active) return;
+      setMessages(conversation ? restoredMessages(conversation) : []);
+      setAgentResult(conversation?.last_result ?? null);
+      setProgress(conversation?.last_result?.status_trace ?? []);
+      const restoredModel = conversation?.last_result?.render_instruction?.model_id ?? conversation?.last_result?.tool_result?.obj_id;
+      if (restoredModel) setActiveModelId(String(restoredModel));
+      const view = conversation?.last_result?.ui_instruction?.target_view;
+      if (view) setActiveView(view);
+    }).catch(caught => {
+      if (active) setError(caught instanceof Error ? caught.message : '会话恢复失败');
+    }).finally(() => { if (active) setIsRestoring(false); });
+    return () => { active = false; controller.abort(); };
+  }, [conversationId]);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(MODEL_PROVIDER_STORAGE_KEY, modelProvider);
-    } catch {
-      // Local persistence is best-effort; model selection falls back to API.
-    }
-  }, [modelProvider]);
+  useEffect(() => () => requestAbortRef.current?.abort(), []);
 
   useEffect(() => {
     if (!shouldBindModelViewerMaterial) {
@@ -254,174 +192,19 @@ export default function Workbench() {
     setIsAutoRotate(false);
   }, [previewUsesAssembly]);
 
-  useEffect(() => {
-    return () => stopSpeech();
-  }, []);
-
   function currentTime() {
-    return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'});
   }
 
-  function stopAvatarAnimation() {
-    if (avatarTimerRef.current !== null) {
-      window.clearInterval(avatarTimerRef.current);
-      avatarTimerRef.current = null;
-    }
-    setAvatarFrameIndex(0);
-  }
-
-  function startAvatarAnimation(rate = SPEECH_RATE) {
-    stopAvatarAnimation();
-    const intervalMs = Math.max(80, Math.round(150 / rate));
-    avatarTimerRef.current = window.setInterval(() => {
-      setAvatarFrameIndex((index) => (index + 1) % AVATAR_FRAMES.length);
-    }, intervalMs);
-  }
-
-  function stopSpeech() {
-    speechRunIdRef.current += 1;
-    if (activeAudioRef.current) {
-      activeAudioRef.current.pause();
-      activeAudioRef.current.src = '';
-      activeAudioRef.current = null;
-    }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-    setSpeakingMessageIndex(null);
-    stopAvatarAnimation();
-  }
-
-  function chooseBoyVoice(voices: SpeechSynthesisVoice[]) {
-    const preferred = voices.find((voice) => /zh|Chinese|中文/i.test(`${voice.lang} ${voice.name}`) && /boy|male|男|yunxi|kangkang/i.test(voice.name));
-    return preferred ?? voices.find((voice) => /zh|Chinese|中文/i.test(`${voice.lang} ${voice.name}`)) ?? null;
-  }
-
-  async function getBrowserVoices() {
-    if (!('speechSynthesis' in window)) {
-      return [];
-    }
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) {
-      return voices;
-    }
-    return new Promise<SpeechSynthesisVoice[]>((resolve) => {
-      let settled = false;
-      const resolveOnce = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        window.clearTimeout(timeoutId);
-        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
-        resolve(window.speechSynthesis.getVoices());
-      };
-      const timeoutId = window.setTimeout(resolveOnce, 600);
-      const handleVoicesChanged = () => resolveOnce();
-      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
-    });
-  }
-
-  async function playAudioBlob(blob: Blob, runId: number) {
-    return new Promise<void>((resolve, reject) => {
-      const audioUrl = URL.createObjectURL(blob);
-      const audio = new Audio(audioUrl);
-      let settled = false;
-
-      const finish = (error?: unknown) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        URL.revokeObjectURL(audioUrl);
-        if (activeAudioRef.current === audio) {
-          activeAudioRef.current = null;
-        }
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      };
-
-      activeAudioRef.current = audio;
-      audio.playbackRate = SPEECH_RATE;
-      audio.onplaying = () => {
-        if (runId === speechRunIdRef.current) {
-          startAvatarAnimation(SPEECH_RATE);
-        }
-      };
-      audio.onended = () => finish();
-      audio.onerror = () => finish(new Error('TTS 音频播放失败'));
-      audio.onpause = () => {
-        if (runId !== speechRunIdRef.current) {
-          finish(new Error('TTS 音频已停止'));
-        }
-      };
-      audio.play().catch(finish);
-    });
-  }
-
-  async function speakWithWebSpeech(text: string, runId: number) {
-    if (!('speechSynthesis' in window)) {
-      throw new Error('当前浏览器不支持 Web Speech');
-    }
-    const voices = await getBrowserVoices();
-    if (runId !== speechRunIdRef.current) {
-      return;
-    }
-    return new Promise<void>((resolve, reject) => {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'zh-CN';
-      utterance.rate = SPEECH_RATE;
-      utterance.pitch = 1.22;
-      utterance.voice = chooseBoyVoice(voices);
-      utterance.onstart = () => {
-        if (runId === speechRunIdRef.current) {
-          startAvatarAnimation(SPEECH_RATE);
-        }
-      };
-      utterance.onend = () => resolve();
-      utterance.onerror = (event) => reject(new Error(event.error || 'Web Speech 播放失败'));
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
-    });
-  }
-
-  async function handleSpeakMessage(text: string, index: number) {
-    const content = text.trim();
-    if (!content) {
-      return;
-    }
-    if (speakingMessageIndex === index) {
-      stopSpeech();
-      return;
-    }
-
-    stopSpeech();
-    const runId = speechRunIdRef.current + 1;
-    speechRunIdRef.current = runId;
-    setSpeakingMessageIndex(index);
-
+  async function handleClearConversation() {
+    if (isSending || isRestoring) return;
+    setIsSending(true);
     try {
-      try {
-        const audio = await synthesizeSpeech(content, SPEECH_RATE);
-        if (runId !== speechRunIdRef.current) {
-          return;
-        }
-        await playAudioBlob(audio, runId);
-      } catch {
-        if (runId !== speechRunIdRef.current) {
-          return;
-        }
-        await speakWithWebSpeech(content, runId);
-      }
-    } finally {
-      if (runId === speechRunIdRef.current) {
-        setSpeakingMessageIndex(null);
-        stopAvatarAnimation();
-      }
-    }
+      await deleteConversation(conversationId);
+      handleNewConversation();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '清空失败');
+    } finally { setIsSending(false); }
   }
 
   function handleNewConversation() {
@@ -430,10 +213,18 @@ export default function Workbench() {
     setChatInput('');
     setError('');
     setAgentResult(null);
+    setProgress([]);
+    setImageFiles([]);
+    setPreviewImage(null);
+    setImagePreview(MOCK_MODELS[0].imageUrl);
   }
 
   function handleFileChange(files?: File[] | FileList | null) {
     const nextFiles = Array.from(files ?? []);
+    if (nextFiles.length > 5 || nextFiles.some(file => file.size > 10 * 1024 * 1024)) {
+      setError('最多上传 5 张图片，每张不超过 10 MiB。');
+      return;
+    }
     setImageFiles(nextFiles);
     if (nextFiles[0]) {
       setImagePreview(URL.createObjectURL(nextFiles[0]));
@@ -444,7 +235,7 @@ export default function Workbench() {
 
   async function handleSend() {
     const content = chatInput.trim();
-    if (!content || isSending) return;
+    if (!content || isSending || isRestoring || requestAbortRef.current) return;
 
     const uploadedImages = imageFiles;
     const uploadedImageUrl = uploadedImages[0] ? URL.createObjectURL(uploadedImages[0]) : undefined;
@@ -454,7 +245,9 @@ export default function Workbench() {
 
     setError('');
     setIsSending(true);
-    const requestHistory = toAgentHistory(messages);
+    setProgress([]);
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
     setChatInput('');
     setMessages((items) => [
       ...items,
@@ -475,10 +268,9 @@ export default function Workbench() {
       const result = await streamAgentChat(
         content,
         conversationId,
-        requestHistory,
-        modelProvider,
         uploadedImages.length ? uploadedImages : undefined,
         {
+          onProgress: event => setProgress(items => [...items, event]),
           onAnswerDelta: (delta) => {
             streamedAnswer += delta;
             setMessages((items) => items.map((item) => {
@@ -489,11 +281,13 @@ export default function Workbench() {
             }));
           },
         },
+        controller.signal,
       );
       if (result.conversation_id && result.conversation_id !== conversationId) {
         setConversationId(result.conversation_id);
       }
       setAgentResult(result);
+      setProgress(result.status_trace);
       const modelId = result.render_instruction?.model_id ?? result.tool_result?.obj_id;
       if (modelId) {
         setActiveModelId(String(modelId));
@@ -511,6 +305,7 @@ export default function Workbench() {
         item.pending ? { role: 'agent', text: `请求失败：${message}`, time: currentTime(), pending: false } : item
       )));
     } finally {
+      requestAbortRef.current = null;
       setIsSending(false);
     }
   }
@@ -665,7 +460,7 @@ export default function Workbench() {
                 <input
                   className="hidden"
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg,image/png,image/webp"
                   multiple
                   onChange={(event) => {
                     handleFileChange(event.target.files);
@@ -1010,10 +805,10 @@ export default function Workbench() {
                   </h4>
                   {agentResult?.rag_hits.length ? (
                     <div className="space-y-3">
-                      {agentResult.rag_hits.map((hit) => (
+                      {agentResult.rag_hits.map((hit, index) => (
                         <article key={hit.chunk_id} className="bg-white p-5 rounded-lg border border-outline-variant/10 wooden-border paper-texture">
                           <div className="mb-2 flex items-center justify-between gap-3">
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-accent-strong">{hit.source}</p>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-accent-strong">[{index + 1}] {hit.source}</p>
                             {typeof hit.page === 'number' && <p className="text-[10px] text-on-surface/40">第 {hit.page} 页</p>}
                           </div>
                           <p className="text-sm leading-relaxed text-on-surface/70">{hit.text}</p>
@@ -1039,46 +834,26 @@ export default function Workbench() {
               <div className="flex h-full items-center gap-3">
                 <button
                   onClick={handleNewConversation}
-                  disabled={isSending}
+                  disabled={isSending || isRestoring}
                   className="flex items-center gap-1.5 rounded border border-outline-variant/20 px-2.5 py-1.5 text-[11px] font-bold text-ink transition-colors hover:border-accent-strong hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-50 wooden-border"
                 >
                   <PlusCircle size={14} /> 新对话
                 </button>
-                <img
-                  src={AVATAR_FRAMES[avatarFrameIndex]}
-                  alt="数字人"
-                  className="h-20 w-auto shrink-0 object-contain"
-                />
+                <button type="button" onClick={() => void handleClearConversation()} disabled={isSending || isRestoring}
+                  className="text-[11px] text-on-surface/60 disabled:opacity-40">清空</button>
               </div>
             </div>
             <div className="border-b border-outline-variant/10 bg-white px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-on-surface/40">推理模型</p>
-                <span className="text-[10px] font-bold text-accent-strong">
-                  {AGENT_MODEL_OPTIONS.find((item) => item.provider === modelProvider)?.mode}
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {AGENT_MODEL_OPTIONS.map((option) => {
-                  const active = modelProvider === option.provider;
-                  return (
-                    <button
-                      key={option.provider}
-                      type="button"
-                      disabled={isSending}
-                      onClick={() => setModelProvider(option.provider)}
-                      className={`rounded border px-2 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                        active
-                          ? 'border-accent-strong bg-accent-strong/10 text-accent-strong'
-                          : 'border-outline-variant/15 bg-surface-container-lowest text-on-surface/60 hover:border-accent-strong hover:text-accent-strong'
-                      }`}
-                    >
-                      <span className="block text-[10px] font-bold">{option.mode}</span>
-                      <span className="mt-1 block truncate text-[11px] font-semibold">{option.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <p className="text-xs font-semibold text-accent-strong">DeepSeek V4.1 Flash · API</p>
+              {isRestoring && <p className="mt-2 text-[11px] text-on-surface/60">正在恢复当前会话…</p>}
+              {progress.length > 0 && <details open={isSending} className="mt-2 text-[11px] text-on-surface/60" aria-live="polite">
+                <summary className="cursor-pointer">{isSending ? '执行进度' : '本轮执行记录'} · {progress.at(-1)?.message}</summary>
+                <ol className="mt-2 max-h-36 overflow-auto space-y-1">
+                  {progress.map((event, index) => <li key={index} className={event.event === 'tool_error' ? 'text-red-700' : ''}>
+                    {index + 1}. {event.message}
+                  </li>)}
+                </ol>
+              </details>}
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
@@ -1102,28 +877,6 @@ export default function Workbench() {
               )}
               {messages.map((msg, i) => (
                 <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'} space-y-2`}>
-                  {msg.role === 'agent' && (
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="w-5 h-5 bg-accent-strong rounded-full flex items-center justify-center">
-                        <Bot size={12} className="text-white" />
-                      </div>
-                      <span className="text-[10px] font-bold text-ink">AGENT</span>
-                      <button
-                        type="button"
-                        onClick={() => void handleSpeakMessage(msg.text, i)}
-                        disabled={msg.pending || !msg.text.trim()}
-                        className={`rounded p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                          speakingMessageIndex === i
-                            ? 'bg-accent-strong text-white'
-                            : 'text-on-surface/45 hover:bg-surface-container-high hover:text-accent-strong'
-                        }`}
-                        title={speakingMessageIndex === i ? '停止播报' : '播报回复'}
-                        aria-label={speakingMessageIndex === i ? '停止播报' : '播报回复'}
-                      >
-                        {speakingMessageIndex === i ? <Square size={11} /> : <Volume2 size={13} />}
-                      </button>
-                    </div>
-                  )}
                   <div className={`p-3 rounded-lg text-xs max-w-[90%] leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-ink text-white rounded-tr-none' : 'bg-surface-container-high text-on-surface rounded-tl-none'}`}>
                     {msg.imageUrl && (
                       <button
@@ -1172,7 +925,7 @@ export default function Workbench() {
                       ref={chatFileInputRef}
                       className="hidden"
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp"
                       multiple
                       onChange={(event) => {
                         handleFileChange(event.target.files);
@@ -1192,11 +945,8 @@ export default function Workbench() {
                         {imageFiles.length > 1 ? `${imageFiles.length} 张图片` : imageFiles[0].name}
                       </span>
                     )}
-                    <button className="p-1.5 text-on-surface/40 hover:text-accent-strong hover:bg-white rounded transition-colors">
-                      <Mic size={18} />
-                    </button>
                   </div>
-                  <button onClick={handleSend} disabled={isSending || !chatInput.trim()} className="flex items-center gap-2 px-3 py-1.5 bg-accent-strong text-white rounded text-[11px] font-bold uppercase tracking-wider hover:bg-accent-strong/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-wood-dark/20">
+                  <button onClick={handleSend} disabled={isSending || isRestoring || !chatInput.trim()} className="flex items-center gap-2 px-3 py-1.5 bg-accent-strong text-white rounded text-[11px] font-bold uppercase tracking-wider hover:bg-accent-strong/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-wood-dark/20">
                     {isSending ? '分析中' : '发送'} <Send size={14} />
                   </button>
                 </div>
@@ -1208,7 +958,7 @@ export default function Workbench() {
 
       <footer className="fixed bottom-0 w-full h-7 bg-ink border-t border-white/5 flex justify-between items-center px-4 z-50">
         <div className="flex items-center gap-6">
-          <span className="text-white/40 font-body text-[9px] uppercase tracking-widest">Backend 8000 | Agent 8001 | GLB | RAG Ready</span>
+          <span className="text-white/40 font-body text-[9px] uppercase tracking-widest">Agent 8001 | DeepSeek API | BGE-M3</span>
         </div>
         <div className="flex items-center gap-4">
           <a className="text-white/40 hover:text-jade font-body text-[9px] uppercase tracking-widest" href="#">隐私政策</a>

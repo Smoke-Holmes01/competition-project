@@ -1,12 +1,10 @@
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar';
-import RequireAuth from './auth/RequireAuth';
 
 const LandingPage = lazy(() => import('./components/LandingPage'));
 const ModelLibrary = lazy(() => import('./components/ModelLibrary'));
 const Workbench = lazy(() => import('./components/Workbench'));
-const LoginPage = lazy(() => import('./components/LoginPage'));
 const AboutPage = lazy(() => import('./components/AboutPage'));
 
 export default function App() {
@@ -29,10 +27,7 @@ function AppContent() {
             <Routes>
               <Route path="/" element={<LandingPage />} />
               <Route path="/library" element={<ModelLibrary />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route element={<RequireAuth />}>
-                <Route path="/workbench" element={<Workbench />} />
-              </Route>
+              <Route path="/workbench" element={<Workbench />} />
               <Route path="/about" element={<AboutPage />} />
             </Routes>
           </Suspense>

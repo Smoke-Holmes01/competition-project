@@ -6,11 +6,11 @@
 
 | 目录 | 内容 |
 | --- | --- |
-| `agent/` | FastAPI Agent 服务：意图路由、视觉工具调用、知识检索和回答生成 |
+| `agent/` | FastAPI + LangGraph ReAct：DeepSeek API、BGE-M3 检索、视觉工具适配和 SQLite 会话 |
 | `ancient_arch_backend/` | FastAPI 视觉后端：分类匹配、分割、修复与模型资源接口 |
 | `ancient-architecture-agent/` | React + TypeScript + Vite 前端 |
 
-各模块的依赖安装和启动方式见其目录内的 README。当前实现与检查记录见 [项目分析](项目分析.md)。
+各模块的依赖安装和启动方式见其目录内的 README。Agent 重构和配置迁移见 [Agent README](agent/README.md)，本次检查见 [重构验证记录](agent/docs/verification.md)。[项目分析](项目分析.md) 保留的是重构前归档基线。
 
 ## 本仓库的内容范围
 

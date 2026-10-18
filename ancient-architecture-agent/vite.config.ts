@@ -7,9 +7,6 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -19,11 +16,10 @@ export default defineConfig(({mode}) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      host: '0.0.0.0',
-      allowedHosts: ["game.czyjay.top"],
+      host: '127.0.0.1',
+      allowedHosts: env.VITE_ALLOWED_HOSTS?.split(',').map(host => host.trim()).filter(Boolean) ?? [],
       port: 5173,
       proxy: {
-        '/auth': 'http://127.0.0.1:8001',
         '/agent': 'http://127.0.0.1:8001',
         '/models_glb': 'http://127.0.0.1:8000',
         '/models': 'http://127.0.0.1:8000',
