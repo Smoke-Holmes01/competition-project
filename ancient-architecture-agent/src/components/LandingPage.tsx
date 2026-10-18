@@ -3,11 +3,9 @@ import { ArrowRight, SearchCode, BrainCircuit, Box, ExternalLink, Upload, Messag
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { MOCK_MODELS } from '../constants';
-import { useAuth } from '../auth/AuthProvider';
 
 export default function LandingPage() {
-  const { isAuthenticated } = useAuth();
-  const workbenchTarget = isAuthenticated ? '/workbench' : '/login?redirect=%2Fworkbench';
+  const workbenchTarget = '/workbench';
 
   return (
     <div className="flex flex-col">

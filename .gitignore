@@ -20,6 +20,10 @@ coverage/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
+.npm-cache/
+agent/storage/runtime/
+agent/storage/index/
 *.tsbuildinfo
 *.log
 ancient_arch_backend/outputs/
